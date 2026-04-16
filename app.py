@@ -1,12 +1,3 @@
-"""
-Book Sales Dashboard — Streamlit + Render
-Данные лежат в папке ./data/ рядом с app.py:
-  data/
-    DATA1/  users.csv  books.yaml  orders.parquet
-    DATA2/  ...
-    DATA3/  ...
-"""
-
 import os
 import re
 import yaml
@@ -20,15 +11,10 @@ import streamlit as st
 from pathlib import Path
 from dateutil import parser as dateutil_parser
 
-# ── Путь к данным ────────────────────────────────────────────────────────────
-# Локально:  положите данные в ./data/DATA1 ... DATA3
-# На Render: задайте env-переменную DATA_ROOT=/opt/render/project/src/data
 DATA_ROOT = Path(os.environ.get("DATA_ROOT", Path(__file__).parent / "data"))
 
-# ── Конфигурация страницы ────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Book Sales Dashboard",
-    page_icon="📚",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -42,11 +28,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ─────────────────────────────────────────────────────────────────────────────
 
 def parse_price(raw):
     if pd.isna(raw):
@@ -68,7 +49,6 @@ def parse_price(raw):
         val *= 1.2
     return round(val, 2)
 
-
 def parse_ts(raw):
     if pd.isna(raw):
         return pd.NaT
@@ -83,12 +63,10 @@ def parse_ts(raw):
         except Exception:
             return pd.NaT
 
-
 @st.cache_data(show_spinner=False)
 def load_dataset(root: str, name: str):
     folder = Path(root) / name
 
-    # users
     users = pd.read_csv(folder / "users.csv")
     users.columns = users.columns.str.strip()
     users = users.drop_duplicates()
@@ -99,7 +77,6 @@ def load_dataset(root: str, name: str):
         users[col] = users[col].astype(str).str.strip()
         users[col] = users[col].replace({"": np.nan, "nan": np.nan, "NULL": np.nan})
 
-    # books
     with open(folder / "books.yaml", encoding="utf-8") as f:
         raw_books = yaml.safe_load(f)
     books = pd.DataFrame(raw_books)
@@ -107,7 +84,6 @@ def load_dataset(root: str, name: str):
     books = books.drop_duplicates(subset=["id"])
     books["id"] = pd.to_numeric(books["id"], errors="coerce").astype("Int64")
 
-    # orders
     orders = pd.read_parquet(folder / "orders.parquet")
     orders.columns = orders.columns.str.strip()
     orders = orders.drop_duplicates()
@@ -124,7 +100,6 @@ def load_dataset(root: str, name: str):
 
     return users, books, orders
 
-
 def daily_revenue(orders):
     dr = (
         orders.groupby("date")["paid_price"]
@@ -136,7 +111,6 @@ def daily_revenue(orders):
     top5 = dr.nlargest(5, "revenue").reset_index(drop=True)
     top5["date_str"] = top5["date"].astype(str)
     return dr, top5
-
 
 def reconcile_users(users):
     ids = users["id"].tolist()
@@ -168,7 +142,6 @@ def reconcile_users(users):
     roots = {find(i) for i in ids}
     return parent, len(roots)
 
-
 def author_sets(books):
     def parse_authors(s):
         if pd.isna(s):
@@ -178,7 +151,6 @@ def author_sets(books):
     sets = books["author"].apply(parse_authors)
     unique = {s for s in sets if s}
     return unique, len(unique)
-
 
 def most_popular_author(books, orders):
     def parse_authors(s):
@@ -197,7 +169,6 @@ def most_popular_author(books, orders):
     top_key = sold.idxmax()
     return top_key, int(sold.max())
 
-
 def top_customer(users, orders, parent):
     def find(x, p):
         while p[x] != x:
@@ -212,7 +183,6 @@ def top_customer(users, orders, parent):
     top_root = spending.idxmax()
     cluster_ids = sorted(uid for uid, root in root_map.items() if root == top_root)
     return cluster_ids, round(spending.max(), 2)
-
 
 def make_revenue_fig(dr, title):
     fig, ax = plt.subplots(figsize=(10, 3.5))
@@ -232,12 +202,7 @@ def make_revenue_fig(dr, title):
     plt.tight_layout()
     return fig
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ИНТЕРФЕЙС
-# ─────────────────────────────────────────────────────────────────────────────
-
-st.title("📚 Book Sales Dashboard")
+st.title("Book Sales Dashboard")
 st.caption("Revenue · Users · Authors · Top Buyers")
 
 DATASETS = ["DATA1", "DATA2", "DATA3"]
@@ -245,64 +210,63 @@ found = [ds for ds in DATASETS if (DATA_ROOT / ds).is_dir()]
 
 if not found:
     st.error(
-        f"**Папки DATA1/DATA2/DATA3 не найдены** в `{DATA_ROOT}`.\n\n"
-        "Убедитесь, что:\n"
-        "- данные лежат в `data/DATA1`, `data/DATA2`, `data/DATA3` рядом с `app.py`\n"
-        "- или переменная окружения `DATA_ROOT` указывает на нужную директорию"
+        f"**Can not find folders DATA1/DATA2/DATA3** in `{DATA_ROOT}`.\n\n"
+        "Check, that:\n"
+        "- data in `data/DATA1`, `data/DATA2`, `data/DATA3` with `app.py`\n"
+        "- or environmental variables `DATA_ROOT` point to the desired directory"
     )
     st.stop()
 
-tabs = st.tabs([f"📂 {ds}" for ds in found])
+tabs = st.tabs([f" {ds}" for ds in found])
 
 for tab, ds in zip(tabs, found):
     with tab:
-        with st.spinner(f"Обрабатываем {ds}…"):
+        with st.spinner(f"Processing {ds}…"):
             try:
                 users, books, orders = load_dataset(str(DATA_ROOT), ds)
             except Exception as exc:
-                st.error(f"Ошибка загрузки {ds}: {exc}")
+                st.error(f"Loading error {ds}: {exc}")
                 continue
 
         dr, top5 = daily_revenue(orders)
         parent, n_unique = reconcile_users(users)
         _, n_sets = author_sets(books)
         pop_author, pop_count = most_popular_author(books, orders)
-        cluster_ids, top_spend = top_customer(users, orders, parent)
+        cluster_ids, top_spend = top_buyers(users, orders, parent)
 
-        # KPI
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Заказов", f"{len(orders):,}")
-        c2.metric("Уникальных пользователей", f"{n_unique:,}")
-        c3.metric("Уникальных наборов авторов", f"{n_sets:,}")
-        c4.metric("Топ-покупатель", f"${top_spend:,.2f}")
+        c1.metric("Orders", f"{len(orders):,}")
+        c2.metric("Unique users", f"{n_unique:,}")
+        c3.metric("Unique authors", f"{n_sets:,}")
+        c4.metric("Top buyers", f"${top_spend:,.2f}")
 
         st.divider()
 
         col_chart, col_table = st.columns([2, 1])
         with col_chart:
-            st.subheader("📈 Дневная выручка")
+            st.subheader("Daily Revenue")
             fig = make_revenue_fig(dr, f"{ds} — Daily Revenue")
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
 
         with col_table:
-            st.subheader("🏆 Топ-5 дней")
+            st.subheader("Top 5 days")
             t5 = top5[["date_str", "revenue"]].copy()
-            t5.columns = ["Дата", "Выручка"]
-            t5["Выручка"] = t5["Выручка"].map("${:,.2f}".format)
+            t5.columns = ["Date", "Revenue"]
+            t5["Revenue"] = t5["Revenue"].map("${:,.2f}".format)
             st.dataframe(t5, hide_index=True, use_container_width=True)
 
         st.divider()
 
         col_a, col_b = st.columns(2)
         with col_a:
-            st.subheader("✍️ Самый популярный автор(ы)")
-            st.info(f"**{pop_author}**\n\nПродано книг: **{pop_count:,}**")
+            st.subheader("The most popular author(-s)")
+            st.info(f"**{pop_author}**\n\nBooks sold: **{pop_count:,}**")
         with col_b:
-            st.subheader("🛒 Топ-покупатель — все ID")
+            st.subheader("Top buyers — all ID")
             st.code(", ".join(str(i) for i in cluster_ids))
 
-        with st.expander("🔍 Сырые данные (первые 100 строк)"):
+        with st.expander("Raw data (first 100 rows)"):
             t1, t2, t3 = st.tabs(["users", "books", "orders"])
             with t1:
                 st.dataframe(users.head(100), use_container_width=True)
