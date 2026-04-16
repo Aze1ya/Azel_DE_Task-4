@@ -232,7 +232,7 @@ for tab, ds in zip(tabs, found):
         parent, n_unique = reconcile_users(users)
         _, n_sets = author_sets(books)
         pop_author, pop_count = most_popular_author(books, orders)
-        cluster_ids, top_spend = top_buyers(users, orders, parent)
+        cluster_ids, top_spend = top_customer(users, orders, parent)
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Orders", f"{len(orders):,}")
