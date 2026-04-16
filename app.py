@@ -187,7 +187,7 @@ def top_customer(users, orders, parent):
 def make_revenue_fig(dr, title):
     fig, ax = plt.subplots(figsize=(10, 3.5))
     dates = pd.to_datetime(dr["date"])
-    ax.plot(dates, dr["revenue"], color="#4F8EF7", linewidth=2, marker="o", markersize=3)
+    ax.plot(dates, dr["revenue"], color="#4F8EF7", linewidth=2)
     ax.fill_between(dates, dr["revenue"], alpha=0.12, color="#4F8EF7")
     ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
     ax.set_xlabel("Date")
@@ -234,11 +234,10 @@ for tab, ds in zip(tabs, found):
         pop_author, pop_count = most_popular_author(books, orders)
         cluster_ids, top_spend = top_customer(users, orders, parent)
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Orders", f"{len(orders):,}")
         c2.metric("Unique users", f"{n_unique:,}")
         c3.metric("Unique authors", f"{n_sets:,}")
-        c4.metric("Top buyers", f"${top_spend:,.2f}")
 
         st.divider()
 
@@ -263,8 +262,13 @@ for tab, ds in zip(tabs, found):
             st.subheader("The most popular author(-s)")
             st.info(f"**{pop_author}**\n\nBooks sold: **{pop_count:,}**")
         with col_b:
-            st.subheader("Top buyers — all ID")
-            st.code(", ".join(str(i) for i in cluster_ids))
+            st.subheader("Top buyer")
+            st.markdown(f"**Total spending: ${top_spend:,.2f}**")
+            st.markdown(f"**All user IDs:** `{cluster_ids}`")
+
+        st.subheader("Top buyer — full profile (all aliases)")
+        top_users_df = users[users["id"].isin(cluster_ids)].reset_index(drop=True)
+        st.dataframe(top_users_df, use_container_width=True, hide_index=True)
 
         with st.expander("Raw data (first 100 rows)"):
             t1, t2, t3 = st.tabs(["users", "books", "orders"])
