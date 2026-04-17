@@ -202,7 +202,9 @@ def parse_price(raw):
     if pd.isna(raw): return np.nan
     s = str(raw).strip()
     is_euro = bool(re.search(r"€|EUR", s, re.I))
-    cent_match = re.search(r"(\d+)[€$¢\s]*[¢](\d+)", s)
+
+    # Handles: "22$75¢", "22 75¢", "22€75¢", "22.75¢" — dollars + cents with ¢ at end
+    cent_match = re.search(r"(\d+)[^\d]*(\d+)\s*¢", s)
     if cent_match:
         val = int(cent_match.group(1)) + int(cent_match.group(2)) / 100
     else:
@@ -210,6 +212,7 @@ def parse_price(raw):
         if not digits or digits == ".": return np.nan
         try: val = float(digits)
         except ValueError: return np.nan
+
     if is_euro: val *= 1.2
     return round(val, 2)
 
