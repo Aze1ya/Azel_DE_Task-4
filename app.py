@@ -201,23 +201,30 @@ hr { border-color: #1e2d45 !important; margin: 24px 0 !important; }
 def parse_price(raw):
     if pd.isna(raw): return np.nan
     s = str(raw).strip()
-    is_euro = bool(re.search(r"€|EUR", s, re.I))
+    is_euro = bool(re.search(r'€|EUR', s, re.I))
 
-    # Handles: "22$75¢", "$14¢75", "76€50¢", "€50¢50"
-    cent_match = re.search(r"(\d+)[^\d]*(\d+)\s*¢", s)
-    if cent_match:
-        val = int(cent_match.group(1)) + int(cent_match.group(2)) / 100
+    # Формат: цифры€цифры¢  или  цифры$цифры¢  или  символцифры¢цифры
+    # Два числа где второе — центы (после ¢ ИЛИ перед ¢ в конце)
+    # Паттерн 1: "76€50¢", "22$75¢" — число SEPARATOR число ¢
+    m = re.search(r'^[^\d]*(\d+)[^\d]+(\d+)\s*¢\s*$', s)
+    if m:
+        val = int(m.group(1)) + int(m.group(2)) / 100
+    # Паттерн 2: "$14¢75", "€50¢50" — число ¢ число
+    elif re.search(r'¢', s) and not s.strip().endswith('¢'):
+        m2 = re.search(r'(\d+)\s*¢\s*(\d+)', s)
+        if m2:
+            val = int(m2.group(1)) + int(m2.group(2)) / 100
+        else:
+            return np.nan
     else:
-        digits = re.sub(r"[^\d.]", "", s)
-        if not digits or digits == ".": return np.nan
-        # Защита от "1.234.56" → берём только первое валидное число
+        digits = re.sub(r'[^\d.]', '', s)
+        if not digits or digits == '.': return np.nan
         try:
             val = float(digits)
         except ValueError:
-            # Несколько точек — берём первое совпадение
-            m = re.search(r"\d+\.?\d*", digits)
-            if not m: return np.nan
-            val = float(m.group())
+            m3 = re.search(r'\d+\.?\d*', digits)
+            if not m3: return np.nan
+            val = float(m3.group())
 
     if is_euro: val *= 1.2
     return round(val, 2)
