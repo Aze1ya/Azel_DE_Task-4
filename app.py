@@ -257,8 +257,12 @@ def load_dataset(root: str, name: str):
     return users, books, orders
 
 def daily_revenue(orders):
-    dr = (orders.groupby("date")["paid_price"].sum().reset_index()
-          .rename(columns={"paid_price": "revenue"}).sort_values("date"))
+    dr = (
+        orders.groupby("date")
+        .agg(revenue=("paid_price", "sum"), total_orders=("id", "count"))
+        .reset_index()
+        .sort_values("date")
+    )
     top5 = dr.nlargest(5, "revenue").reset_index(drop=True)
     top5["date_str"] = top5["date"].astype(str)
     return dr, top5
@@ -446,7 +450,16 @@ for tab, ds in zip(tabs, found):
 
         st.markdown("<hr>", unsafe_allow_html=True)
 
-        # Author + top buyer
+        # Daily stats table
+        st.markdown('<div class="section-header">Daily Revenue & Orders</div>', unsafe_allow_html=True)
+        daily_table = dr[["date", "revenue", "total_orders"]].copy()
+        daily_table.columns = ["Day", "Daily Revenue", "Total Orders"]
+        daily_table["Day"] = daily_table["Day"].astype(str)
+        daily_table["Daily Revenue"] = daily_table["Daily Revenue"].map("${:,.2f}".format)
+        daily_table = daily_table.sort_values("Day", ascending=False).reset_index(drop=True)
+        st.dataframe(daily_table, use_container_width=True, hide_index=True, height=320)
+
+
         col_a, col_b = st.columns(2)
         with col_a:
             st.markdown('<div class="section-header">Most Popular Author(s)</div>', unsafe_allow_html=True)
