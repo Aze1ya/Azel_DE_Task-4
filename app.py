@@ -203,15 +203,21 @@ def parse_price(raw):
     s = str(raw).strip()
     is_euro = bool(re.search(r"€|EUR", s, re.I))
 
-    # Handles: "22$75¢", "22 75¢", "22€75¢", "22.75¢" — dollars + cents with ¢ at end
+    # Handles: "22$75¢", "$14¢75", "76€50¢", "€50¢50"
     cent_match = re.search(r"(\d+)[^\d]*(\d+)\s*¢", s)
     if cent_match:
         val = int(cent_match.group(1)) + int(cent_match.group(2)) / 100
     else:
         digits = re.sub(r"[^\d.]", "", s)
         if not digits or digits == ".": return np.nan
-        try: val = float(digits)
-        except ValueError: return np.nan
+        # Защита от "1.234.56" → берём только первое валидное число
+        try:
+            val = float(digits)
+        except ValueError:
+            # Несколько точек — берём первое совпадение
+            m = re.search(r"\d+\.?\d*", digits)
+            if not m: return np.nan
+            val = float(m.group())
 
     if is_euro: val *= 1.2
     return round(val, 2)
