@@ -263,7 +263,7 @@ def parse_ts(raw):
     try: return dateutil_parser.parse(s, dayfirst=True)
     except Exception: return pd.NaT
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=0)
 def load_dataset(root: str, name: str):
     folder = Path(root) / name
     users = pd.read_csv(folder / "users.csv")
@@ -431,6 +431,9 @@ if not found:
         "- Or set `DATA_ROOT` environment variable to the correct path."
     )
     st.stop()
+
+# Clear stale cache on every reload so parse fixes take effect immediately
+load_dataset.clear()
 
 tabs = st.tabs([f"  {ds}  " for ds in found])
 
