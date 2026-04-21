@@ -253,25 +253,35 @@ def parse_price(raw):
 
 def detect_dot_format(timestamps) -> str:
     """
-    Scan a column of raw timestamp strings to determine the format of
-    dot-separated dates (DD.MM.YYYY vs MM.DD.YYYY).
+    Scan ALL dot-format timestamps to determine whether they use DD.MM.YYYY
+    or MM.DD.YYYY, by counting unambiguous indicators across the full column.
 
-    Logic — look for the first unambiguous example:
-      • first_part > 12  →  must be the day  →  DD.MM.YYYY
-      • second_part > 12 →  must be the day  →  MM.DD.YYYY
-    If no unambiguous example is found, fall back to 'MM.DD' (dateutil
-    default, preserving original behaviour for datasets like DATA1).
+    Indicator logic:
+      • first_part > 12  →  cannot be a month  →  DD.MM.YYYY evidence
+      • second_part > 12 →  cannot be a month  →  MM.DD.YYYY evidence
+        (in DD.MM, second_part is the month and is always ≤ 12;
+         in MM.DD, second_part is the day and can be 13-31)
+
+    Counting ALL indicators (not stopping at the first) correctly handles
+    datasets like DATA1 that have isolated unambiguous entries like
+    '19.02.YYYY' (which appear in both MM.DD and DD.MM datasets and would
+    trigger a false 'DD.MM' result if we stopped at the first match).
+
+    Returns 'DD.MM' only when DD.MM evidence strictly outnumbers MM.DD
+    evidence; otherwise returns 'MM.DD' (the original dateutil default).
     """
     pat = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b")
+    ddmm_count = 0   # first_part > 12: unambiguously the day  → DD.MM
+    mmdd_count = 0   # second_part > 12: unambiguously the day → MM.DD
     for ts in timestamps:
         m = pat.search(str(ts))
         if m:
             first, second = int(m.group(1)), int(m.group(2))
             if first > 12:
-                return "DD.MM"
+                ddmm_count += 1
             if second > 12:
-                return "MM.DD"
-    return "MM.DD"   # fallback — original dateutil dayfirst=False behaviour
+                mmdd_count += 1
+    return "DD.MM" if ddmm_count > mmdd_count else "MM.DD"
 
 
 def parse_ts(raw, dot_format: str = "MM.DD"):
@@ -299,6 +309,10 @@ def parse_ts(raw, dot_format: str = "MM.DD"):
         p1, p2, year = dot_match.groups()
         rest = s[:dot_match.start()] + s[dot_match.end():]
         day, month = (p1, p2) if dot_format == "DD.MM" else (p2, p1)
+        # Safety: if the chosen month is still > 12 (e.g. an unambiguous entry
+        # like '19.02.YYYY' in an MM.DD dataset), swap day/month automatically.
+        if int(month) > 12:
+            day, month = month, day
         iso = f"{year}-{int(month):02d}-{int(day):02d} {rest}".strip()
         try: return dateutil_parser.parse(iso)
         except Exception: return pd.NaT
