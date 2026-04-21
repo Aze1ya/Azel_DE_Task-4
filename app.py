@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import streamlit as st
 from pathlib import Path
+from collections import defaultdict
 from dateutil import parser as dateutil_parser
 
 DATA_ROOT = Path(os.environ.get("DATA_ROOT", Path(__file__).parent / "data"))
@@ -198,6 +199,28 @@ hr { border-color: #1e2d45 !important; margin: 24px 0 !important; }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+# Titles and suffixes to strip from author/user names
+_TITLES   = re.compile(
+    r'^(Sen\.|Rep\.|Rev\.|Fr\.|Amb\.|Msgr\.|Dr\.|Prof\.|Gov\.|Pres\.|'
+    r'Miss|Ms\.|Mr\.|Mrs\.|Sr\.|Gen\.|Col\.|Lt\.|Sgt\.)\s+',
+    re.I,
+)
+_SUFFIXES = re.compile(
+    r'\s+(Jr\.|Sr\.|II|III|IV|V|I|MD|DDS|PhD|LLD|JD|DC|VM|DO|DVM|Esq\.?|Ret\.)$',
+    re.I,
+)
+
+def _norm_name(raw: str) -> str:
+    """Strip honorific titles and generational/professional suffixes, lowercase."""
+    s = str(raw).strip()
+    s = _TITLES.sub("", s)
+    s = _SUFFIXES.sub("", s)
+    return s.lower().strip()
+
+def _norm_phone(raw: str) -> str:
+    """Keep digits only so that (462) 385-4294 == 913.466.4487-style variants match."""
+    return re.sub(r"\D", "", str(raw))
+
 def parse_price(raw):
     """Parse price strings in all formats found in this dataset:
       - Plain number: '22.75', '100', 'USD71.25'
@@ -228,23 +251,54 @@ def parse_price(raw):
     if is_euro: val *= 1.2
     return round(val, 2)
 
-def parse_ts(raw):
-    """Parse timestamps from 3 formats present in this dataset:
-      - DD.MM.YYYY [time]   — dot-separated, day-first  (confirmed: entries like 19.02.2025)
-      - YYYY-MM-DD [time]   — ISO 8601, must NOT use dayfirst
-      - MM/DD/YY [time]     — US slash format           (confirmed: second part goes > 12)
+def detect_dot_format(timestamps) -> str:
+    """
+    Scan a column of raw timestamp strings to determine the format of
+    dot-separated dates (DD.MM.YYYY vs MM.DD.YYYY).
+
+    Logic — look for the first unambiguous example:
+      • first_part > 12  →  must be the day  →  DD.MM.YYYY
+      • second_part > 12 →  must be the day  →  MM.DD.YYYY
+    If no unambiguous example is found, fall back to 'MM.DD' (dateutil
+    default, preserving original behaviour for datasets like DATA1).
+    """
+    pat = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b")
+    for ts in timestamps:
+        m = pat.search(str(ts))
+        if m:
+            first, second = int(m.group(1)), int(m.group(2))
+            if first > 12:
+                return "DD.MM"
+            if second > 12:
+                return "MM.DD"
+    return "MM.DD"   # fallback — original dateutil dayfirst=False behaviour
+
+
+def parse_ts(raw, dot_format: str = "MM.DD"):
+    """Parse timestamps from all formats found in these datasets:
+      - DD.MM.YYYY [time]   — dot-separated, day-first  (e.g. DATA2, DATA3)
+      - MM.DD.YYYY [time]   — dot-separated, month-first (e.g. DATA1)
+      - YYYY-MM-DD [time]   — ISO 8601
+      - MM/DD/YY[YY] [time] — US slash format
       - everything else     — dateutil dayfirst=True fallback
+
+    The `dot_format` parameter is determined once per dataset by
+    detect_dot_format() and passed in via a functools.partial in load_dataset.
+
+    FIX: dot dates must be rewritten to unambiguous ISO before dateutil sees
+    them; which part is day vs month depends on the dataset's convention.
     """
     if pd.isna(raw): return pd.NaT
     s = str(raw).strip().replace(";", " ").replace(",", " ")
     s = re.sub(r"A\.M\.", "AM", s, flags=re.I)
     s = re.sub(r"P\.M\.", "PM", s, flags=re.I)
 
-    # 1) DD.MM.YYYY — dot format, always day-first in this dataset
+    # 1) Dot-format date — rewrite to unambiguous ISO using detected convention
     dot_match = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b", s)
     if dot_match:
-        day, month, year = dot_match.groups()
+        p1, p2, year = dot_match.groups()
         rest = s[:dot_match.start()] + s[dot_match.end():]
+        day, month = (p1, p2) if dot_format == "DD.MM" else (p2, p1)
         iso = f"{year}-{int(month):02d}-{int(day):02d} {rest}".strip()
         try: return dateutil_parser.parse(iso)
         except Exception: return pd.NaT
@@ -288,7 +342,12 @@ def load_dataset(root: str, name: str):
         orders[col] = pd.to_numeric(orders[col], errors="coerce")
     orders = orders.dropna(subset=["id", "user_id", "book_id", "quantity"])
     orders["unit_price_usd"] = orders["unit_price"].apply(parse_price)
-    orders["timestamp_dt"] = orders["timestamp"].apply(parse_ts)
+    # Auto-detect whether dot-format dates in this dataset are DD.MM or MM.DD,
+    # then bind the result so every timestamp is parsed with the correct convention.
+    dot_fmt = detect_dot_format(orders["timestamp"])
+    orders["timestamp_dt"] = orders["timestamp"].apply(
+        lambda raw: parse_ts(raw, dot_format=dot_fmt)
+    )
     orders = orders.dropna(subset=["unit_price_usd", "timestamp_dt"])
     orders["paid_price"] = (orders["quantity"] * orders["unit_price_usd"]).round(2)
     orders["date"] = orders["timestamp_dt"].dt.date
@@ -308,38 +367,136 @@ def daily_revenue(orders):
     return dr, top5
 
 def reconcile_users(users):
-    ids = users["id"].tolist()
-    parent = {i: i for i in ids}
+    """
+    Identify duplicate user records using union-find.
+
+    A user can appear multiple times with one field changed:
+      - alias instead of real name
+      - different phone number
+      - different address
+      - different e-mail
+
+    Strategy: build a normalized lookup index for each of the four fields,
+    then for every candidate pair that shares at least one field check how many
+    fields they agree on in total. Merge only when score >= 3 (i.e. at most
+    one field differs), which is the correct threshold given the assumption
+    that only one field is changed per duplicate.
+
+    Normalisation applied before comparison:
+      - name:    strip honorific titles and generational/professional suffixes
+      - phone:   keep digits only (removes formatting differences)
+      - address: lowercase + strip
+      - email:   lowercase + strip
+
+    FIX vs original:
+      - Added 'address' field (was missing entirely)
+      - Normalise phone to digits-only  (was raw string comparison)
+      - Normalise name via _norm_name() (was raw lowercase)
+      - Require score >= 3 out of 4     (was union on ANY single shared field)
+    """
+    # Build normalised columns on a working copy
+    u = users.copy()
+    u["_name"]    = u["name"].apply(lambda v: _norm_name(v) if pd.notna(v) else None)
+    u["_phone"]   = u["phone"].apply(lambda v: _norm_phone(v) if pd.notna(v) else None)
+    u["_address"] = u["address"].apply(
+        lambda v: str(v).strip().lower() if pd.notna(v) else None
+    )
+    u["_email"]   = u["email"].apply(
+        lambda v: str(v).strip().lower() if pd.notna(v) else None
+    )
+
+    ids = u["id"].tolist()
+    row_of = {uid: i for i, uid in enumerate(ids)}   # uid → row index
+
+    # Union-Find on user IDs
+    parent = {uid: uid for uid in ids}
+
     def find(x):
         while parent[x] != x:
-            parent[x] = parent[parent[x]]; x = parent[x]
+            parent[x] = parent[parent[x]]
+            x = parent[x]
         return x
+
     def union(a, b):
         ra, rb = find(a), find(b)
-        if ra != rb: parent[rb] = ra
-    for field in ["email", "phone", "name"]:
-        idx: dict = {}
-        for _, row in users.iterrows():
+        if ra != rb:
+            parent[rb] = ra
+
+    # Build an inverted index for each normalised field
+    norm_fields = ["_email", "_phone", "_address", "_name"]
+
+    field_index: dict[str, dict[str, list]] = {}
+    for field in norm_fields:
+        idx: dict[str, list] = {}
+        for _, row in u.iterrows():
             val = row[field]
-            if pd.isna(val) or str(val).strip() == "": continue
-            val = str(val).strip().lower()
+            if not val or val == "nan":
+                continue
             idx.setdefault(val, []).append(row["id"])
+        field_index[field] = idx
+
+    # For every pair sharing at least one field, count total matching fields
+    checked: set = set()
+    for field, idx in field_index.items():
         for uid_list in idx.values():
-            for i in range(1, len(uid_list)): union(uid_list[0], uid_list[i])
-    return parent, len({find(i) for i in ids})
+            if len(uid_list) < 2:
+                continue
+            for a in range(len(uid_list)):
+                for b in range(a + 1, len(uid_list)):
+                    uid_a, uid_b = uid_list[a], uid_list[b]
+                    pair = (min(uid_a, uid_b), max(uid_a, uid_b))
+                    if pair in checked:
+                        continue
+                    checked.add(pair)
+                    ra, rb = row_of[uid_a], row_of[uid_b]
+                    score = sum(
+                        1 for f in norm_fields
+                        if u.at[ra, f] and u.at[rb, f]
+                        and u.at[ra, f] != "nan" and u.at[rb, f] != "nan"
+                        and u.at[ra, f] == u.at[rb, f]
+                    )
+                    if score >= 3:
+                        union(uid_a, uid_b)
+
+    return parent, len({find(uid) for uid in ids})
 
 def author_sets(books):
-    def pa(s):
-        if pd.isna(s): return frozenset()
-        return frozenset(a.strip() for a in str(s).split(",") if a.strip())
-    sets = books["author"].apply(pa)
-    return {s for s in sets if s}, len({s for s in sets if s})
+    """
+    Return the set of unique author-sets and their count.
+
+    FIX vs original:
+      - Strip honorific titles and suffixes from each author name via _norm_name()
+        so that 'Rev. Lura Jaskolski' and 'Lura Jaskolski' are treated as the same person.
+    """
+    def parse_authors(s):
+        if pd.isna(s):
+            return frozenset()
+        return frozenset(
+            _norm_name(a) for a in str(s).split(",") if a.strip()
+        )
+
+    sets = books["author"].apply(parse_authors)
+    unique = {s for s in sets if s}
+    return unique, len(unique)
 
 def most_popular_author(books, orders):
-    def pa(s):
-        if pd.isna(s): return frozenset()
-        return frozenset(a.strip() for a in str(s).split(",") if a.strip())
-    b = books.copy(); b["author_set"] = b["author"].apply(pa); b["book_id"] = b["id"]
+    """
+    Return the best-selling author set (label, total units sold).
+
+    FIX vs original:
+      - Normalise author names via _norm_name() before grouping,
+        consistent with author_sets().
+    """
+    def parse_authors(s):
+        if pd.isna(s):
+            return frozenset()
+        return frozenset(
+            _norm_name(a) for a in str(s).split(",") if a.strip()
+        )
+
+    b = books.copy()
+    b["author_set"] = b["author"].apply(parse_authors)
+    b["book_id"]    = b["id"]
     merged = orders.merge(b[["book_id", "author_set"]], on="book_id", how="left")
     merged = merged.dropna(subset=["author_set"])
     merged = merged[merged["author_set"].apply(bool)]
@@ -348,14 +505,29 @@ def most_popular_author(books, orders):
     return sold.idxmax(), int(sold.max())
 
 def top_customer(users, orders, parent):
+    """
+    Return (list_of_user_ids, total_spend) for the cluster with highest spend.
+
+    Uses the parent dict returned by reconcile_users so the cluster mapping
+    is consistent with the unique-user count shown in the KPI card.
+    """
     def find(x, p):
-        while p[x] != x: p[x] = p[p[x]]; x = p[x]
+        while p[x] != x:
+            p[x] = p[p[x]]
+            x = p[x]
         return x
-    root_map = {uid: find(uid, dict(parent)) for uid in parent}
-    o = orders.copy(); o["root_id"] = o["user_id"].map(root_map)
+
+    # Work on a copy of parent so path-compression doesn't mutate the original
+    p = dict(parent)
+    root_map = {uid: find(uid, p) for uid in p}
+
+    o = orders.copy()
+    o["root_id"] = o["user_id"].map(root_map)
     spending = o.groupby("root_id")["paid_price"].sum()
-    top_root = spending.idxmax()
-    return sorted(uid for uid, root in root_map.items() if root == top_root), round(spending.max(), 2)
+    top_root  = spending.idxmax()
+
+    cluster_ids = sorted(uid for uid, root in root_map.items() if root == top_root)
+    return cluster_ids, round(float(spending.max()), 2)
 
 # ── Chart factories ───────────────────────────────────────────────────────────
 
@@ -501,7 +673,6 @@ for tab, ds in zip(tabs, found):
         daily_table["Daily Revenue"] = daily_table["Daily Revenue"].map("${:,.2f}".format)
         daily_table = daily_table.sort_values("Day", ascending=False).reset_index(drop=True)
         st.dataframe(daily_table, use_container_width=True, hide_index=True, height=320)
-
 
         col_a, col_b = st.columns(2)
         with col_a:
