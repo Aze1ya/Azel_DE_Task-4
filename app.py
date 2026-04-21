@@ -230,14 +230,39 @@ def parse_price(raw):
     return round(val, 2)
 
 def parse_ts(raw):
+    """Parse timestamps from 3 formats present in this dataset:
+      - DD.MM.YYYY [time]   — dot-separated, day-first  (confirmed: entries like 19.02.2025)
+      - YYYY-MM-DD [time]   — ISO 8601, must NOT use dayfirst
+      - MM/DD/YY [time]     — US slash format           (confirmed: second part goes > 12)
+      - everything else     — dateutil dayfirst=True fallback
+    """
     if pd.isna(raw): return pd.NaT
     s = str(raw).strip().replace(";", " ").replace(",", " ")
     s = re.sub(r"A\.M\.", "AM", s, flags=re.I)
     s = re.sub(r"P\.M\.", "PM", s, flags=re.I)
-    try: return dateutil_parser.parse(s, dayfirst=False)
-    except Exception:
-        try: return dateutil_parser.parse(s, dayfirst=True)
+
+    # 1) DD.MM.YYYY — dot format, always day-first in this dataset
+    dot_match = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b", s)
+    if dot_match:
+        day, month, year = dot_match.groups()
+        rest = s[:dot_match.start()] + s[dot_match.end():]
+        iso = f"{year}-{int(month):02d}-{int(day):02d} {rest}".strip()
+        try: return dateutil_parser.parse(iso)
         except Exception: return pd.NaT
+
+    # 2) ISO YYYY-MM-DD — parse directly, no dayfirst
+    if re.search(r"\d{4}-\d{2}-\d{2}", s):
+        try: return dateutil_parser.parse(s, dayfirst=False)
+        except Exception: return pd.NaT
+
+    # 3) US slash MM/DD/YY[YY] — month-first
+    if re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", s):
+        try: return dateutil_parser.parse(s, dayfirst=False)
+        except Exception: return pd.NaT
+
+    # 4) Everything else (named months, dashes, etc.) — dayfirst=True
+    try: return dateutil_parser.parse(s, dayfirst=True)
+    except Exception: return pd.NaT
 
 @st.cache_data(show_spinner=False)
 def load_dataset(root: str, name: str):
