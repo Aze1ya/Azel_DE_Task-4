@@ -199,47 +199,71 @@ hr { border-color: #1e2d45 !important; margin: 24px 0 !important; }
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def parse_price(raw):
+    """Parse price strings in all formats found in this dataset:
+      - Plain number: '22.75', '100', 'USD71.25'
+      - Euro: '€50', '21.99EUR', 'EUR 73.00'  → value * 1.2
+      - Cents with ¢: '49$50¢', '$16¢75', '$58¢25', '€28¢50', '22$75¢'
+        All ¢-formats: extract all digit groups → [dollars, cents]
+    """
     if pd.isna(raw): return np.nan
     s = str(raw).strip()
     is_euro = bool(re.search(r'€|EUR', s, re.I))
 
-    # Формат: цифры€цифры¢  или  цифры$цифры¢  или  символцифры¢цифры
-    # Два числа где второе — центы (после ¢ ИЛИ перед ¢ в конце)
-    # Паттерн 1: "76€50¢", "22$75¢" — число SEPARATOR число ¢
-    m = re.search(r'^[^\d]*(\d+)[^\d]+(\d+)\s*¢\s*$', s)
-    if m:
-        val = int(m.group(1)) + int(m.group(2)) / 100
-    # Паттерн 2: "$14¢75", "€50¢50" — число ¢ число
-    elif re.search(r'¢', s) and not s.strip().endswith('¢'):
-        m2 = re.search(r'(\d+)\s*¢\s*(\d+)', s)
-        if m2:
-            val = int(m2.group(1)) + int(m2.group(2)) / 100
+    # Any string containing ¢ — extract all digit groups in order: [dollars, cents]
+    if '¢' in s:
+        nums = re.findall(r'\d+', s)
+        if len(nums) >= 2:
+            val = int(nums[0]) + int(nums[1]) / 100
+        elif len(nums) == 1:
+            val = int(nums[0]) / 100  # bare cents like '75¢'
         else:
             return np.nan
-    else:
-        digits = re.sub(r'[^\d.]', '', s)
-        if not digits or digits == '.': return np.nan
-        try:
-            val = float(digits)
-        except ValueError:
-            m3 = re.search(r'\d+\.?\d*', digits)
-            if not m3: return np.nan
-            val = float(m3.group())
+        if is_euro: val *= 1.2
+        return round(val, 2)
 
+    digits = re.sub(r'[^\d.]', '', s)
+    if not digits or digits == '.': return np.nan
+    try: val = float(digits)
+    except ValueError: return np.nan
     if is_euro: val *= 1.2
     return round(val, 2)
 
 def parse_ts(raw):
+    """Parse timestamps from 3 formats present in this dataset:
+      - DD.MM.YYYY [time]   — dot-separated, day-first  (confirmed: entries like 19.02.2025)
+      - YYYY-MM-DD [time]   — ISO 8601, must NOT use dayfirst
+      - MM/DD/YY [time]     — US slash format           (confirmed: second part goes > 12)
+      - everything else     — dateutil dayfirst=True fallback
+    """
     if pd.isna(raw): return pd.NaT
     s = str(raw).strip().replace(";", " ").replace(",", " ")
     s = re.sub(r"A\.M\.", "AM", s, flags=re.I)
     s = re.sub(r"P\.M\.", "PM", s, flags=re.I)
-    try: return dateutil_parser.parse(s, dayfirst=False)
-    except Exception:
-        try: return dateutil_parser.parse(s, dayfirst=True)
+
+    # 1) DD.MM.YYYY — dot format, always day-first in this dataset
+    dot_match = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b", s)
+    if dot_match:
+        day, month, year = dot_match.groups()
+        rest = s[:dot_match.start()] + s[dot_match.end():]
+        iso = f"{year}-{int(month):02d}-{int(day):02d} {rest}".strip()
+        try: return dateutil_parser.parse(iso)
         except Exception: return pd.NaT
 
-@st.cache_data(show_spinner=False)
+    # 2) ISO YYYY-MM-DD — parse directly, no dayfirst
+    if re.search(r"\d{4}-\d{2}-\d{2}", s):
+        try: return dateutil_parser.parse(s, dayfirst=False)
+        except Exception: return pd.NaT
+
+    # 3) US slash MM/DD/YY[YY] — month-first
+    if re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", s):
+        try: return dateutil_parser.parse(s, dayfirst=False)
+        except Exception: return pd.NaT
+
+    # 4) Everything else (named months, dashes, etc.) — dayfirst=True
+    try: return dateutil_parser.parse(s, dayfirst=True)
+    except Exception: return pd.NaT
+
+@st.cache_data(show_spinner=False, ttl=0)
 def load_dataset(root: str, name: str):
     folder = Path(root) / name
     users = pd.read_csv(folder / "users.csv")
@@ -407,6 +431,9 @@ if not found:
         "- Or set `DATA_ROOT` environment variable to the correct path."
     )
     st.stop()
+
+# Clear stale cache on every reload so parse fixes take effect immediately
+load_dataset.clear()
 
 tabs = st.tabs([f"  {ds}  " for ds in found])
 
