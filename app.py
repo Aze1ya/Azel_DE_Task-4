@@ -199,33 +199,32 @@ hr { border-color: #1e2d45 !important; margin: 24px 0 !important; }
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def parse_price(raw):
+    """Parse price strings in all formats found in this dataset:
+      - Plain number: '22.75', '100', 'USD71.25'
+      - Euro: '€50', '21.99EUR', 'EUR 73.00'  → value * 1.2
+      - Cents with ¢: '49$50¢', '$16¢75', '$58¢25', '€28¢50', '22$75¢'
+        All ¢-formats: extract all digit groups → [dollars, cents]
+    """
     if pd.isna(raw): return np.nan
     s = str(raw).strip()
     is_euro = bool(re.search(r'€|EUR', s, re.I))
 
-    # Формат: цифры€цифры¢  или  цифры$цифры¢  или  символцифры¢цифры
-    # Два числа где второе — центы (после ¢ ИЛИ перед ¢ в конце)
-    # Паттерн 1: "76€50¢", "22$75¢" — число SEPARATOR число ¢
-    m = re.search(r'^[^\d]*(\d+)[^\d]+(\d+)\s*¢\s*$', s)
-    if m:
-        val = int(m.group(1)) + int(m.group(2)) / 100
-    # Паттерн 2: "$14¢75", "€50¢50" — число ¢ число
-    elif re.search(r'¢', s) and not s.strip().endswith('¢'):
-        m2 = re.search(r'(\d+)\s*¢\s*(\d+)', s)
-        if m2:
-            val = int(m2.group(1)) + int(m2.group(2)) / 100
+    # Any string containing ¢ — extract all digit groups in order: [dollars, cents]
+    if '¢' in s:
+        nums = re.findall(r'\d+', s)
+        if len(nums) >= 2:
+            val = int(nums[0]) + int(nums[1]) / 100
+        elif len(nums) == 1:
+            val = int(nums[0]) / 100  # bare cents like '75¢'
         else:
             return np.nan
-    else:
-        digits = re.sub(r'[^\d.]', '', s)
-        if not digits or digits == '.': return np.nan
-        try:
-            val = float(digits)
-        except ValueError:
-            m3 = re.search(r'\d+\.?\d*', digits)
-            if not m3: return np.nan
-            val = float(m3.group())
+        if is_euro: val *= 1.2
+        return round(val, 2)
 
+    digits = re.sub(r'[^\d.]', '', s)
+    if not digits or digits == '.': return np.nan
+    try: val = float(digits)
+    except ValueError: return np.nan
     if is_euro: val *= 1.2
     return round(val, 2)
 
