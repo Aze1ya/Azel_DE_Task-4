@@ -271,17 +271,23 @@ def detect_dot_format(timestamps) -> str:
     evidence; otherwise returns 'MM.DD' (the original dateutil default).
     """
     pat = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b")
-    ddmm_count = 0   # first_part > 12: unambiguously the day  → DD.MM
-    mmdd_count = 0   # second_part > 12: unambiguously the day → MM.DD
+    has_large_first  = False  # any first_part > 12  → evidence for DD.MM
+    has_large_second = False  # any second_part > 12 → impossible in DD.MM (months ≤ 12)
     for ts in timestamps:
         m = pat.search(str(ts))
         if m:
             first, second = int(m.group(1)), int(m.group(2))
-            if first > 12:
-                ddmm_count += 1
-            if second > 12:
-                mmdd_count += 1
-    return "DD.MM" if ddmm_count > mmdd_count else "MM.DD"
+            if first > 12:  has_large_first  = True
+            if second > 12: has_large_second = True
+        if has_large_first and has_large_second:
+            break  # already know it's not a pure DD.MM dataset
+    # Return DD.MM only for PURE DD.MM datasets:
+    # - has unambiguous DD.MM entries (first_part > 12 exists)
+    # - AND zero MM.DD evidence (second_part > 12 never appears,
+    #   because in DD.MM the second part is always a month, 1-12)
+    # Mixed or MM.DD datasets (DATA1) will have has_large_second=True
+    # and fall back to the original dateutil dayfirst=False behaviour.
+    return "DD.MM" if (has_large_first and not has_large_second) else "MM.DD"
 
 
 def parse_ts(raw, dot_format: str = "MM.DD"):
