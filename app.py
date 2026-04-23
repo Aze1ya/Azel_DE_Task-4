@@ -196,17 +196,26 @@ hr { border-color: #1e2d45 !important; margin: 24px 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def parse_price(raw):
+    """Parse price strings in all formats found in this dataset:
+      - Plain number: '22.75', '100', 'USD71.25'
+      - Euro: '€50', '21.99EUR', 'EUR 73.00'  → value * 1.2
+      - Cents with ¢: '49$50¢', '$16¢75', '$58¢25', '€28¢50', '22$75¢'
+        All ¢-formats: extract all digit groups → [dollars, cents]
+    """
     if pd.isna(raw): return np.nan
     s = str(raw).strip()
     is_euro = bool(re.search(r'€|EUR', s, re.I))
 
+    # Any string containing ¢ — extract all digit groups in order: [dollars, cents]
     if '¢' in s:
         nums = re.findall(r'\d+', s)
         if len(nums) >= 2:
             val = int(nums[0]) + int(nums[1]) / 100
         elif len(nums) == 1:
-            val = int(nums[0]) / 100
+            val = int(nums[0]) / 100  # bare cents like '75¢'
         else:
             return np.nan
         if is_euro: val *= 1.2
@@ -220,11 +229,18 @@ def parse_price(raw):
     return round(val, 2)
 
 def parse_ts(raw):
+    """Parse timestamps from 3 formats present in this dataset:
+      - DD.MM.YYYY [time]   — dot-separated, day-first  (confirmed: entries like 19.02.2025)
+      - YYYY-MM-DD [time]   — ISO 8601, must NOT use dayfirst
+      - MM/DD/YY [time]     — US slash format           (confirmed: second part goes > 12)
+      - everything else     — dateutil dayfirst=True fallback
+    """
     if pd.isna(raw): return pd.NaT
     s = str(raw).strip().replace(";", " ").replace(",", " ")
     s = re.sub(r"A\.M\.", "AM", s, flags=re.I)
     s = re.sub(r"P\.M\.", "PM", s, flags=re.I)
 
+    # 1) DD.MM.YYYY — dot format, always day-first in this dataset
     dot_match = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b", s)
     if dot_match:
         day, month, year = dot_match.groups()
@@ -233,14 +249,17 @@ def parse_ts(raw):
         try: return dateutil_parser.parse(iso)
         except Exception: return pd.NaT
 
+    # 2) ISO YYYY-MM-DD — parse directly, no dayfirst
     if re.search(r"\d{4}-\d{2}-\d{2}", s):
         try: return dateutil_parser.parse(s, dayfirst=False)
         except Exception: return pd.NaT
 
+    # 3) US slash MM/DD/YY[YY] — month-first
     if re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", s):
         try: return dateutil_parser.parse(s, dayfirst=False)
         except Exception: return pd.NaT
 
+    # 4) Everything else (named months, dashes, etc.) — dayfirst=True
     try: return dateutil_parser.parse(s, dayfirst=True)
     except Exception: return pd.NaT
 
@@ -338,6 +357,8 @@ def top_customer(users, orders, parent):
     top_root = spending.idxmax()
     return sorted(uid for uid, root in root_map.items() if root == top_root), round(spending.max(), 2)
 
+# ── Chart factories ───────────────────────────────────────────────────────────
+
 def make_revenue_fig(dr):
     BG, GRID, LINE, TEXT = "#111827", "#1e2d45", "#38bdf8", "#64748b"
     fig, ax = plt.subplots(figsize=(11, 3.6), facecolor=BG)
@@ -379,20 +400,26 @@ def make_top5_fig(top5):
     plt.tight_layout(pad=1.2)
     return fig
 
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+
 with st.sidebar:
-    st.markdown('<div class="sidebar-logo">BookSales</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-logo">📚 BookSales</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-sub">Analytics Platform</div>', unsafe_allow_html=True)
     st.markdown("---")
     st.markdown('<div class="nav-section">Navigation</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nav-item active">&nbsp; Dashboard</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nav-item">&nbsp; Orders</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nav-item">&nbsp; Customers</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nav-item">&nbsp; Books</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-item active">📊 &nbsp; Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-item">📦 &nbsp; Orders</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-item">👥 &nbsp; Customers</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-item">📖 &nbsp; Books</div>', unsafe_allow_html=True)
     st.markdown("---")
     st.markdown('<div class="nav-section">Datasets</div>', unsafe_allow_html=True)
 
-st.markdown('<div class="dash-title">Book Sales Dashboard</div>', unsafe_allow_html=True)
+# ── Page header ───────────────────────────────────────────────────────────────
+
+st.markdown('<div class="dash-title">📊 Book Sales Dashboard</div>', unsafe_allow_html=True)
 st.markdown('<div class="dash-subtitle">Revenue · Users · Authors · Top Buyers</div>', unsafe_allow_html=True)
+
+# ── Data ──────────────────────────────────────────────────────────────────────
 
 DATASETS = ["DATA1", "DATA2", "DATA3"]
 found = [ds for ds in DATASETS if (DATA_ROOT / ds).is_dir()]
@@ -405,6 +432,7 @@ if not found:
     )
     st.stop()
 
+# Clear stale cache on every reload so parse fixes take effect immediately
 load_dataset.clear()
 
 tabs = st.tabs([f"  {ds}  " for ds in found])
@@ -424,31 +452,33 @@ for tab, ds in zip(tabs, found):
         pop_author, pop_count = most_popular_author(books, orders)
         cluster_ids, top_spend = top_customer(users, orders, parent)
 
+        # KPI cards
         st.markdown(f"""
         <div class="kpi-row">
           <div class="kpi-card blue">
-            <div class="kpi-icon"></div>
+            <div class="kpi-icon">🛒</div>
             <div class="kpi-label">Total Orders</div>
             <div class="kpi-value">{len(orders):,}</div>
           </div>
           <div class="kpi-card cyan">
-            <div class="kpi-icon"></div>
+            <div class="kpi-icon">👥</div>
             <div class="kpi-label">Unique Users</div>
             <div class="kpi-value">{n_unique:,}</div>
           </div>
           <div class="kpi-card violet">
-            <div class="kpi-icon"></div>
+            <div class="kpi-icon">✍️</div>
             <div class="kpi-label">Unique Authors</div>
             <div class="kpi-value">{n_sets:,}</div>
           </div>
           <div class="kpi-card emerald">
-            <div class="kpi-icon"></div>
+            <div class="kpi-icon">💰</div>
             <div class="kpi-label">Top Buyer Spend</div>
             <div class="kpi-value">${top_spend:,.0f}</div>
           </div>
         </div>
         """, unsafe_allow_html=True)
 
+        # Revenue chart + top 5 bar
         col_chart, col_bar = st.columns([3, 1.5])
         with col_chart:
             st.markdown('<div class="section-header">Daily Revenue</div>', unsafe_allow_html=True)
@@ -463,6 +493,7 @@ for tab, ds in zip(tabs, found):
 
         st.markdown("<hr>", unsafe_allow_html=True)
 
+        # Daily stats table
         st.markdown('<div class="section-header">Daily Revenue & Orders</div>', unsafe_allow_html=True)
         daily_table = dr[["date", "revenue", "total_orders"]].copy()
         daily_table.columns = ["Day", "Daily Revenue", "Total Orders"]
@@ -470,6 +501,7 @@ for tab, ds in zip(tabs, found):
         daily_table["Daily Revenue"] = daily_table["Daily Revenue"].map("${:,.2f}".format)
         daily_table = daily_table.sort_values("Day", ascending=False).reset_index(drop=True)
         st.dataframe(daily_table, use_container_width=True, hide_index=True, height=320)
+
 
         col_a, col_b = st.columns(2)
         with col_a:
@@ -498,14 +530,15 @@ for tab, ds in zip(tabs, found):
             </div>
             """, unsafe_allow_html=True)
 
+        # Full profile table
         st.markdown('<div class="section-header" style="margin-top:24px;">Top Buyer — Full Profile (All Aliases)</div>', unsafe_allow_html=True)
         top_users_df = users[users["id"].isin(cluster_ids)].reset_index(drop=True)
         st.dataframe(top_users_df, use_container_width=True, hide_index=True)
 
         st.markdown("<hr>", unsafe_allow_html=True)
 
-        # with st.expander("Raw data (first 100 rows)"):
-        #     t1, t2, t3 = st.tabs(["Users", "Books", "Orders"])
-        #     with t1: st.dataframe(users.head(100), use_container_width=True)
-        #     with t2: st.dataframe(books.head(100), use_container_width=True)
-        #     with t3: st.dataframe(orders.head(100), use_container_width=True)
+        with st.expander("🗄️  Raw data (first 100 rows)"):
+            t1, t2, t3 = st.tabs(["Users", "Books", "Orders"])
+            with t1: st.dataframe(users.head(100), use_container_width=True)
+            with t2: st.dataframe(books.head(100), use_container_width=True)
+            with t3: st.dataframe(orders.head(100), use_container_width=True)
