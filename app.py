@@ -498,7 +498,7 @@ for tab, ds in zip(tabs, found):
             </div>
             """, unsafe_allow_html=True)
 
-        st.markdown('<div class="section-header" style="margin-top:24px;">Top Buyer — Full Profile (All Aliases)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header" style="margin-top:24px;">Top Buyer — Full Profile</div>', unsafe_allow_html=True)
         top_users_df = users[users["id"].isin(cluster_ids)].reset_index(drop=True)
         st.dataframe(top_users_df, use_container_width=True, hide_index=True)
 
