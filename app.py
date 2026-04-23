@@ -196,26 +196,20 @@ hr { border-color: #1e2d45 !important; margin: 24px 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def parse_price(raw):
     if pd.isna(raw): return np.nan
     s = str(raw).strip()
     is_euro = bool(re.search(r"€|EUR", s, re.I))
 
-    # Handles: "22$75¢", "$14¢75", "76€50¢", "€50¢50"
     cent_match = re.search(r"(\d+)[^\d]*(\d+)\s*¢", s)
     if cent_match:
         val = int(cent_match.group(1)) + int(cent_match.group(2)) / 100
     is_euro = bool(re.search(r'€|EUR', s, re.I))
 
-    # Формат: цифры€цифры¢  или  цифры$цифры¢  или  символцифры¢цифры
-    # Два числа где второе — центы (после ¢ ИЛИ перед ¢ в конце)
-    # Паттерн 1: "76€50¢", "22$75¢" — число SEPARATOR число ¢
     m = re.search(r'^[^\d]*(\d+)[^\d]+(\d+)\s*¢\s*$', s)
     if m:
         val = int(m.group(1)) + int(m.group(2)) / 100
-    # Паттерн 2: "$14¢75", "€50¢50" — число ¢ число
+
     elif re.search(r'¢', s) and not s.strip().endswith('¢'):
         m2 = re.search(r'(\d+)\s*¢\s*(\d+)', s)
         if m2:
@@ -225,13 +219,13 @@ def parse_price(raw):
     else:
         digits = re.sub(r"[^\d.]", "", s)
         if not digits or digits == ".": return np.nan
-        # Защита от "1.234.56" → берём только первое валидное число
+
         digits = re.sub(r'[^\d.]', '', s)
         if not digits or digits == '.': return np.nan
         try:
             val = float(digits)
         except ValueError:
-            # Несколько точек — берём первое совпадение
+
             m = re.search(r"\d+\.?\d*", digits)
             if not m: return np.nan
             val = float(m.group())
@@ -346,8 +340,6 @@ def top_customer(users, orders, parent):
     top_root = spending.idxmax()
     return sorted(uid for uid, root in root_map.items() if root == top_root), round(spending.max(), 2)
 
-# ── Chart factories ───────────────────────────────────────────────────────────
-
 def make_revenue_fig(dr):
     BG, GRID, LINE, TEXT = "#111827", "#1e2d45", "#38bdf8", "#64748b"
     fig, ax = plt.subplots(figsize=(11, 3.6), facecolor=BG)
@@ -389,26 +381,20 @@ def make_top5_fig(top5):
     plt.tight_layout(pad=1.2)
     return fig
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-
 with st.sidebar:
-    st.markdown('<div class="sidebar-logo">📚 BookSales</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-logo">BookSales</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-sub">Analytics Platform</div>', unsafe_allow_html=True)
     st.markdown("---")
     st.markdown('<div class="nav-section">Navigation</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nav-item active">📊 &nbsp; Dashboard</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nav-item">📦 &nbsp; Orders</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nav-item">👥 &nbsp; Customers</div>', unsafe_allow_html=True)
-    st.markdown('<div class="nav-item">📖 &nbsp; Books</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-item active">&nbsp; Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-item">&nbsp; Orders</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-item">&nbsp; Customers</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-item">&nbsp; Books</div>', unsafe_allow_html=True)
     st.markdown("---")
     st.markdown('<div class="nav-section">Datasets</div>', unsafe_allow_html=True)
 
-# ── Page header ───────────────────────────────────────────────────────────────
-
-st.markdown('<div class="dash-title">📊 Book Sales Dashboard</div>', unsafe_allow_html=True)
+st.markdown('<div class="dash-title">Book Sales Dashboard</div>', unsafe_allow_html=True)
 st.markdown('<div class="dash-subtitle">Revenue · Users · Authors · Top Buyers</div>', unsafe_allow_html=True)
-
-# ── Data ──────────────────────────────────────────────────────────────────────
 
 DATASETS = ["DATA1", "DATA2", "DATA3"]
 found = [ds for ds in DATASETS if (DATA_ROOT / ds).is_dir()]
@@ -438,33 +424,31 @@ for tab, ds in zip(tabs, found):
         pop_author, pop_count = most_popular_author(books, orders)
         cluster_ids, top_spend = top_customer(users, orders, parent)
 
-        # KPI cards
         st.markdown(f"""
         <div class="kpi-row">
           <div class="kpi-card blue">
-            <div class="kpi-icon">🛒</div>
+            <div class="kpi-icon"></div>
             <div class="kpi-label">Total Orders</div>
             <div class="kpi-value">{len(orders):,}</div>
           </div>
           <div class="kpi-card cyan">
-            <div class="kpi-icon">👥</div>
+            <div class="kpi-icon"></div>
             <div class="kpi-label">Unique Users</div>
             <div class="kpi-value">{n_unique:,}</div>
           </div>
           <div class="kpi-card violet">
-            <div class="kpi-icon">✍️</div>
+            <div class="kpi-icon"></div>
             <div class="kpi-label">Unique Authors</div>
             <div class="kpi-value">{n_sets:,}</div>
           </div>
           <div class="kpi-card emerald">
-            <div class="kpi-icon">💰</div>
+            <div class="kpi-icon"></div>
             <div class="kpi-label">Top Buyer Spend</div>
             <div class="kpi-value">${top_spend:,.0f}</div>
           </div>
         </div>
         """, unsafe_allow_html=True)
 
-        # Revenue chart + top 5 bar
         col_chart, col_bar = st.columns([3, 1.5])
         with col_chart:
             st.markdown('<div class="section-header">Daily Revenue</div>', unsafe_allow_html=True)
@@ -479,7 +463,6 @@ for tab, ds in zip(tabs, found):
 
         st.markdown("<hr>", unsafe_allow_html=True)
 
-        # Daily stats table
         st.markdown('<div class="section-header">Daily Revenue & Orders</div>', unsafe_allow_html=True)
         daily_table = dr[["date", "revenue", "total_orders"]].copy()
         daily_table.columns = ["Day", "Daily Revenue", "Total Orders"]
@@ -487,7 +470,6 @@ for tab, ds in zip(tabs, found):
         daily_table["Daily Revenue"] = daily_table["Daily Revenue"].map("${:,.2f}".format)
         daily_table = daily_table.sort_values("Day", ascending=False).reset_index(drop=True)
         st.dataframe(daily_table, use_container_width=True, hide_index=True, height=320)
-
 
         col_a, col_b = st.columns(2)
         with col_a:
@@ -516,14 +498,8 @@ for tab, ds in zip(tabs, found):
             </div>
             """, unsafe_allow_html=True)
 
-        # Full profile table
         st.markdown('<div class="section-header" style="margin-top:24px;">Top Buyer — Full Profile (All Aliases)</div>', unsafe_allow_html=True)
         top_users_df = users[users["id"].isin(cluster_ids)].reset_index(drop=True)
         st.dataframe(top_users_df, use_container_width=True, hide_index=True)
 
         st.markdown("<hr>", unsafe_allow_html=True)
-
-        with st.expander("🗄️  Raw data (first 100 rows)"):
-            t1, t2, t3 = st.tabs(["Users", "Books", "Orders"])
-            with t1: st.dataframe(users.head(100), use_container_width=True)
-            with t2: st.dataframe(books.head(100), use_container_width=True)
